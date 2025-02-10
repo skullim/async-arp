@@ -287,11 +287,11 @@ mod tests {
             .expect("Failed to setup dummy test interface");
     }
 
-    fn set_cap_net_raw_capabilities(test_binary: PathBuf) {
+    fn set_cap_net_raw_capabilities(test_bin: PathBuf) {
         Command::new("sudo")
             .arg("setcap")
             .arg("cap_net_raw=eip")
-            .arg(test_binary)
+            .arg(test_bin)
             .status()
             .expect("Failed to set net raw capabilities");
     }

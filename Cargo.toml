@@ -2,8 +2,11 @@
 name = "async-arp"
 version = "0.1.0"
 edition = "2021"
-license = "MIT/Apache-2.0"
+
+authors =["Adrian Skulimowski"]
+description = "An async ARP client library for probing hosts and sending advanced ARP requests."
 repository = "https://github.com/skullim/async-arp"
+license = "MIT/Apache-2.0"
 categories = ["network-programming"]
 
 [dependencies]
