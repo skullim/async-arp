@@ -1,0 +1,19 @@
+[package]
+name = "async-arp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/skullim/async-arp"
+categories = ["network-programming"]
+
+[dependencies]
+afpacket = {version = "0.2.3", features = ["async-tokio"]}
+futures = "0.3.31"
+ipnet = "2.11.0"
+ipnetwork = "0.21.1"
+log = "0.4.25"
+pnet = "0.35.0"
+thiserror = "2.0.11"
+timedmap = "1.0.2"
+tokio = {version = "1.43.0", features = ["io-util", "time", "rt", "macros", "sync"]}
+tokio-util = "0.7.13"
