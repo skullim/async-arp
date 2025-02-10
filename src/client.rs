@@ -1,167 +1,34 @@
 use afpacket::tokio::RawPacketStream;
-use log::debug;
-use pnet::packet::FromPacket;
 use pnet::{
     packet::{
-        arp::{Arp, ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket},
-        ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket},
+        arp::{Arp, ArpHardwareTypes, ArpOperations, MutableArpPacket},
+        ethernet::{EtherTypes, MutableEthernetPacket},
         Packet,
     },
     util::MacAddr,
 };
-use std::{collections::HashMap, net::Ipv4Addr, sync::Arc, time::Duration};
-use thiserror::Error as ThisError;
-use timedmap::TimedMap;
+
+use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     sync::{Mutex, Notify},
 };
 
 use tokio_util::sync::CancellationToken;
 
-pub type OpaqueError = Box<dyn std::error::Error + Send + Sync + 'static>;
+use crate::response::Listener;
+use crate::{caching::ArpCache, constants::ETH_PACK_LEN};
+use crate::{
+    constants::ARP_PACK_LEN,
+    error::{Error, Result},
+};
+use crate::{constants::IP_V4_LEN, notification::NotificationHandler};
+use crate::{
+    constants::MAC_ADDR_LEN,
+    input::{ArpProbeInput, ArpRequestInput},
+};
 
-#[derive(ThisError, Debug)]
-pub enum Error {
-    #[error("Response timeout")]
-    ResponseTimeout,
-    #[error("{0}")]
-    Opaque(#[from] OpaqueError),
-}
-pub type Result<T> = std::result::Result<T, Error>;
-
-struct ArpConstants;
-impl ArpConstants {
-    const PACK_LEN: usize = 28;
-    const AS_ETH_PACK_LEN: usize = 42;
-    const MAC_ADDR_LEN: u8 = 6;
-    const IP_V4_LEN: u8 = 4;
-}
-
-#[allow(clippy::enum_variant_names)]
-#[derive(ThisError, Debug)]
-#[non_exhaustive]
-pub enum InputBuildError {
-    #[error("sender MAC address is required")]
-    MissingSenderMac,
-    #[error("sender IP address is required")]
-    MissingSenderIp,
-    #[error("target MAC address is required")]
-    MissingTargetMac,
-    #[error("target IP address is required")]
-    MissingTargetIp,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum ProbeOutcome {
-    Free,
-    Occupied,
-}
-
-pub struct ArpRequestInput {
-    sender_ip: Ipv4Addr,
-    sender_mac: MacAddr,
-    target_ip: Ipv4Addr,
-    target_mac: MacAddr,
-}
-
-pub struct ArpRequestInputBuilder {
-    sender_ip: Option<Ipv4Addr>,
-    sender_mac: Option<MacAddr>,
-    target_ip: Option<Ipv4Addr>,
-    target_mac: Option<MacAddr>,
-}
-
-impl Default for ArpRequestInputBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ArpRequestInputBuilder {
-    pub fn new() -> Self {
-        Self {
-            sender_ip: None,
-            sender_mac: None,
-            target_ip: None,
-            target_mac: None,
-        }
-    }
-
-    pub fn with_sender_mac(mut self, sender_mac: MacAddr) -> Self {
-        self.sender_mac = Some(sender_mac);
-        self
-    }
-
-    pub fn with_sender_ip(mut self, sender_ip: Ipv4Addr) -> Self {
-        self.sender_ip = Some(sender_ip);
-        self
-    }
-
-    pub fn with_target_mac(mut self, target_mac: MacAddr) -> Self {
-        self.target_mac = Some(target_mac);
-        self
-    }
-
-    pub fn with_target_ip(mut self, target_ip: Ipv4Addr) -> Self {
-        self.target_ip = Some(target_ip);
-        self
-    }
-
-    pub fn build(&self) -> std::result::Result<ArpRequestInput, InputBuildError> {
-        Ok(ArpRequestInput {
-            target_mac: self.target_mac.ok_or(InputBuildError::MissingTargetMac)?,
-            target_ip: self.target_ip.ok_or(InputBuildError::MissingTargetIp)?,
-            sender_mac: self.sender_mac.ok_or(InputBuildError::MissingSenderMac)?,
-            sender_ip: self.sender_ip.ok_or(InputBuildError::MissingSenderIp)?,
-        })
-    }
-}
-
-pub struct ArpProbeInput {
-    sender_mac: MacAddr,
-    target_ip: Ipv4Addr,
-}
-
-pub struct ArpProbeInputBuilder {
-    sender_mac: Option<MacAddr>,
-    target_ip: Option<Ipv4Addr>,
-}
-
-impl Default for ArpProbeInputBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ArpProbeInputBuilder {
-    pub fn new() -> Self {
-        Self {
-            target_ip: None,
-            sender_mac: None,
-        }
-    }
-
-    pub fn with_sender_mac(mut self, sender_mac: MacAddr) -> Self {
-        self.sender_mac = Some(sender_mac);
-        self
-    }
-
-    pub fn with_target_ip(mut self, target_ip: Ipv4Addr) -> Self {
-        self.target_ip = Some(target_ip);
-        self
-    }
-
-    pub fn build(&self) -> std::result::Result<ArpProbeInput, InputBuildError> {
-        Ok(ArpProbeInput {
-            target_ip: self.target_ip.ok_or(InputBuildError::MissingTargetIp)?,
-            sender_mac: self.sender_mac.ok_or(InputBuildError::MissingSenderMac)?,
-        })
-    }
-}
-
-//@todo: Check if Streams can be reused in both client and listener
 pub struct Client {
     response_timeout: Duration,
     stream: Mutex<RawPacketStream>,
@@ -190,7 +57,7 @@ impl Client {
         ));
 
         let mut task_spawner = BackgroundTaskSpawner::new();
-        task_spawner.spawn(ResponseListener::new(interface_name, Arc::clone(&cache))?);
+        task_spawner.spawn(Listener::new(stream.clone(), Arc::clone(&cache)));
 
         Ok(Self {
             response_timeout,
@@ -220,7 +87,7 @@ impl Client {
         if let Some(cached) = self.cache.get(&input.target_ip) {
             return Ok(cached);
         }
-        let mut eth_buf = [0; ArpConstants::AS_ETH_PACK_LEN];
+        let mut eth_buf = [0; ETH_PACK_LEN];
         Self::fill_packet_buf(&mut eth_buf, input);
         let notifier = self
             .notification_handler
@@ -250,12 +117,12 @@ impl Client {
         eth_packet.set_source(input.sender_mac);
         eth_packet.set_ethertype(EtherTypes::Arp);
 
-        let mut arp_buf = [0; ArpConstants::PACK_LEN];
+        let mut arp_buf = [0; ARP_PACK_LEN];
         let mut arp_packet = MutableArpPacket::new(&mut arp_buf).unwrap();
         arp_packet.set_hardware_type(ArpHardwareTypes::Ethernet);
         arp_packet.set_protocol_type(EtherTypes::Ipv4);
-        arp_packet.set_hw_addr_len(ArpConstants::MAC_ADDR_LEN);
-        arp_packet.set_proto_addr_len(ArpConstants::IP_V4_LEN);
+        arp_packet.set_hw_addr_len(MAC_ADDR_LEN);
+        arp_packet.set_proto_addr_len(IP_V4_LEN);
         arp_packet.set_operation(ArpOperations::Request);
         arp_packet.set_sender_hw_addr(input.sender_mac);
         arp_packet.set_sender_proto_addr(input.sender_ip);
@@ -277,6 +144,12 @@ impl Client {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum ProbeOutcome {
+    Free,
+    Occupied,
+}
+
 struct BackgroundTaskSpawner {
     token: CancellationToken,
     handle: Option<JoinHandle<()>>,
@@ -290,19 +163,16 @@ impl BackgroundTaskSpawner {
         }
     }
 
-    fn spawn(&mut self, mut listener: ResponseListener) {
+    fn spawn(&mut self, mut listener: Listener) {
         let token = self.token.clone();
         let handle = tokio::task::spawn(async move {
-            debug!("starting background task");
             tokio::select! {
                 _ = listener.listen() => {
 
                 },
                 _ = token.cancelled() => {
-                    debug!("Background task has been cancellation");
                 }
             }
-            debug!("Finished background task")
         });
         self.handle = Some(handle);
     }
@@ -316,101 +186,6 @@ impl Drop for BackgroundTaskSpawner {
     }
 }
 
-struct ArpCache {
-    timeout: Duration,
-    responses: TimedMap<Ipv4Addr, Arp>,
-    notification_handler: Arc<NotificationHandler>,
-}
-
-impl ArpCache {
-    fn new(timeout: Duration, notification_handler: Arc<NotificationHandler>) -> Self {
-        Self {
-            timeout,
-            responses: TimedMap::new(),
-            notification_handler,
-        }
-    }
-
-    async fn cache(&self, response: Arp) {
-        let ip = response.sender_proto_addr;
-        self.responses.insert(ip, response, self.timeout);
-        self.notification_handler.notify(&ip).await;
-    }
-
-    fn get(&self, ip: &Ipv4Addr) -> Option<Arp> {
-        self.responses.get(ip)
-    }
-}
-
-struct NotificationHandler {
-    notifiers: Mutex<HashMap<Ipv4Addr, Arc<Notify>>>,
-}
-
-impl NotificationHandler {
-    fn new() -> Self {
-        Self {
-            notifiers: Mutex::new(HashMap::new()),
-        }
-    }
-
-    async fn register_notifier(&self, src_ip: Ipv4Addr) -> Arc<Notify> {
-        let mut notifiers = self.notifiers.lock().await;
-        let notifier = Arc::new(Notify::new());
-        notifiers.insert(src_ip, notifier.clone());
-        notifier
-    }
-
-    async fn notify(&self, ip: &Ipv4Addr) {
-        if let Some(notifier) = self.notifiers.lock().await.remove(ip) {
-            notifier.notify_one();
-        }
-    }
-}
-
-struct ResponseListener {
-    stream: RawPacketStream,
-    cache: Arc<ArpCache>,
-}
-
-impl ResponseListener {
-    fn new(interface_name: &str, cache: Arc<ArpCache>) -> Result<Self> {
-        let mut stream = RawPacketStream::new().map_err(|err| {
-            Error::Opaque(format!("failed to create packet stream, reason: {}", err).into())
-        })?;
-        stream.bind(interface_name).map_err(|err| {
-            Error::Opaque(format!("failed to bind interface to stream, reason {}", err).into())
-        })?;
-
-        Ok(Self { stream, cache })
-    }
-
-    async fn listen(&mut self) -> Result<()> {
-        let mut buf = [0; ArpConstants::AS_ETH_PACK_LEN];
-        while let Ok(read_bytes) = self.stream.read(&mut buf).await {
-            if let Ok(arp) = parse_arp_packet(&buf[..read_bytes]) {
-                if arp.operation == ArpOperations::Reply {
-                    self.cache.cache(arp).await;
-                }
-            }
-        }
-        Err(Error::Opaque(
-            "error while reading the interface traffic".into(),
-        ))
-    }
-}
-
-fn parse_arp_packet(bytes: &[u8]) -> Result<Arp> {
-    let ethernet_packet =
-        EthernetPacket::new(bytes).ok_or(Error::Opaque("failed to parse Ethernet frame".into()))?;
-    if ethernet_packet.get_ethertype() == EtherTypes::Arp {
-        Ok(ArpPacket::new(ethernet_packet.payload())
-            .ok_or(Error::Opaque("failed to parse ARP packet".into()))?
-            .from_packet())
-    } else {
-        Err(Error::Opaque("not an ARP packet".into()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -421,7 +196,12 @@ mod tests {
         time::Duration,
     };
 
-    use crate::arp::{parse_arp_packet, ArpProbeInputBuilder, Client, ProbeOutcome};
+    use crate::{
+        client::{Client, ProbeOutcome},
+        constants::{ARP_PACK_LEN, ETH_PACK_LEN, IP_V4_LEN, MAC_ADDR_LEN},
+        input::ArpProbeInputBuilder,
+        response::parse_arp_packet,
+    };
     use afpacket::tokio::RawPacketStream;
     use ipnet::Ipv4Net;
     use pnet::{
@@ -434,8 +214,6 @@ mod tests {
         util::MacAddr,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    use super::ArpConstants;
 
     type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
     type Result<T> = std::result::Result<T, Error>;
@@ -463,17 +241,17 @@ mod tests {
         }
 
         async fn serve(&mut self) -> Result<()> {
-            let mut request_buf = [0; ArpConstants::AS_ETH_PACK_LEN];
-            let mut arp_buf = [0; ArpConstants::PACK_LEN];
-            let mut response_buf = [0; ArpConstants::AS_ETH_PACK_LEN];
+            let mut request_buf = [0; ETH_PACK_LEN];
+            let mut arp_buf = [0; ARP_PACK_LEN];
+            let mut response_buf = [0; ETH_PACK_LEN];
             while let Ok(read_bytes) = self.stream.read(&mut request_buf).await {
                 if let Ok(request) = parse_arp_packet(&request_buf[..read_bytes]) {
                     if self.net.contains(&request.target_proto_addr) {
                         let mut arp_response = MutableArpPacket::new(&mut arp_buf).unwrap();
                         arp_response.set_hardware_type(ArpHardwareTypes::Ethernet);
                         arp_response.set_protocol_type(EtherTypes::Ipv4);
-                        arp_response.set_hw_addr_len(ArpConstants::MAC_ADDR_LEN);
-                        arp_response.set_proto_addr_len(ArpConstants::IP_V4_LEN);
+                        arp_response.set_hw_addr_len(MAC_ADDR_LEN);
+                        arp_response.set_proto_addr_len(IP_V4_LEN);
                         arp_response.set_operation(ArpOperations::Reply);
 
                         arp_response.set_sender_proto_addr(request.target_proto_addr);
@@ -525,27 +303,22 @@ mod tests {
         let test_bin_path = std::env::current_exe().expect("Failed to get test executable");
         set_cap_net_raw_capabilities(test_bin_path);
 
-        let interface_name = "dummy0";
+        const IFACE_NAME: &str = "dummy0";
 
         tokio::spawn(async move {
             let net = Ipv4Net::new(Ipv4Addr::new(10, 1, 1, 0), 25).unwrap();
-            let mut server = Server::new(interface_name, net).unwrap();
+            let mut server = Server::new(IFACE_NAME, net).unwrap();
             server.serve().await.unwrap();
         });
         {
             let client = Arc::new(
-                Client::new(
-                    interface_name,
-                    Duration::from_secs(1),
-                    Duration::from_secs(60),
-                )
-                .unwrap(),
+                Client::new(IFACE_NAME, Duration::from_secs(1), Duration::from_secs(60)).unwrap(),
             );
 
             let source_mac = datalink::interfaces()
                 .into_iter()
-                .find(|iface| iface.name == interface_name)
-                .ok_or_else(|| format!("Interface {} not found", interface_name))
+                .find(|iface| iface.name == IFACE_NAME)
+                .ok_or_else(|| format!("Interface {} not found", IFACE_NAME))
                 .unwrap()
                 .mac
                 .ok_or("interface does not have mac address")
