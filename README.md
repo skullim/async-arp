@@ -8,8 +8,6 @@
 - **Advanced Requests**: Send custom ARP requests and interact with devices in more complex ways.
 - **Unix-only**: This crate is designed for Unix-based systems (Linux, macOS, BSD).
 
-
-
 ## License
 
 Licensed under either of
