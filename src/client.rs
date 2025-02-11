@@ -37,22 +37,58 @@ pub struct Client {
     _task_spawner: BackgroundTaskSpawner,
 }
 
+pub struct ClientConfig {
+    pub interface_name: String,
+    pub response_timeout: Duration,
+    pub cache_timeout: Duration,
+}
+
+pub struct ClientConfigBuilder {
+    interface_name: String,
+    response_timeout: Option<Duration>,
+    cache_timeout: Option<Duration>,
+}
+
+impl ClientConfigBuilder {
+    pub fn new(interface_name: &str) -> Self {
+        Self {
+            interface_name: interface_name.into(),
+            response_timeout: Some(Duration::from_secs(1)),
+            cache_timeout: Some(Duration::from_secs(60)),
+        }
+    }
+
+    pub fn with_response_timeout(mut self, timeout: Duration) -> Self {
+        self.response_timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_cache_timeout(mut self, timeout: Duration) -> Self {
+        self.cache_timeout = Some(timeout);
+        self
+    }
+
+    pub fn build(self) -> ClientConfig {
+        ClientConfig {
+            interface_name: self.interface_name,
+            cache_timeout: self.cache_timeout.unwrap(),
+            response_timeout: self.response_timeout.unwrap(),
+        }
+    }
+}
+
 impl Client {
-    pub fn new(
-        interface_name: &str,
-        response_timeout: Duration,
-        cache_timeout: Duration,
-    ) -> Result<Self> {
+    pub fn new(config: ClientConfig) -> Result<Self> {
         let mut stream = RawPacketStream::new().map_err(|err| {
             Error::Opaque(format!("failed to create packet stream, reason: {}", err).into())
         })?;
-        stream.bind(interface_name).map_err(|err| {
+        stream.bind(&config.interface_name).map_err(|err| {
             Error::Opaque(format!("failed to bind interface to stream, reason {}", err).into())
         })?;
 
         let notification_handler = Arc::new(NotificationHandler::new());
         let cache = Arc::new(ArpCache::new(
-            cache_timeout,
+            config.cache_timeout,
             Arc::clone(&notification_handler),
         ));
 
@@ -60,7 +96,7 @@ impl Client {
         task_spawner.spawn(Listener::new(stream.clone(), Arc::clone(&cache)));
 
         Ok(Self {
-            response_timeout,
+            response_timeout: config.response_timeout,
             stream: Mutex::new(stream),
             cache,
             notification_handler,
@@ -189,11 +225,10 @@ mod tests {
         path::PathBuf,
         process::Command,
         sync::{Arc, Once},
-        time::Duration,
     };
 
     use crate::{
-        client::{Client, ProbeStatus},
+        client::{Client, ClientConfigBuilder, ProbeStatus},
         constants::{ARP_PACK_LEN, ETH_PACK_LEN, IP_V4_LEN, MAC_ADDR_LEN},
         probe::ProbeInputBuilder,
         response::parse_arp_packet,
@@ -299,57 +334,56 @@ mod tests {
         let test_bin_path = std::env::current_exe().expect("Failed to get test executable");
         set_cap_net_raw_capabilities(test_bin_path);
 
-        const IFACE_NAME: &str = "dummy0";
+        const INTERFACE_NAME: &str = "dummy0";
 
         tokio::spawn(async move {
             let net = Ipv4Net::new(Ipv4Addr::new(10, 1, 1, 0), 25).unwrap();
-            let mut server = Server::new(IFACE_NAME, net).unwrap();
+            let mut server = Server::new(INTERFACE_NAME, net).unwrap();
             server.serve().await.unwrap();
         });
         {
-            let client = Arc::new(
-                Client::new(IFACE_NAME, Duration::from_secs(1), Duration::from_secs(60)).unwrap(),
-            );
+            let client =
+                Arc::new(Client::new(ClientConfigBuilder::new(INTERFACE_NAME).build()).unwrap());
 
-            let source_mac = datalink::interfaces()
+            let sender_mac = datalink::interfaces()
                 .into_iter()
-                .find(|iface| iface.name == IFACE_NAME)
-                .ok_or_else(|| format!("interface {} not found", IFACE_NAME))
+                .find(|iface| iface.name == INTERFACE_NAME)
+                .ok_or_else(|| format!("interface {} not found", INTERFACE_NAME))
                 .unwrap()
                 .mac
                 .ok_or("interface does not have mac address")
                 .unwrap();
 
-            let futures: Vec<_> = (0..128)
+            let future_probes: Vec<_> = (0..128)
                 .map(|ip_d| {
                     let client_clone = client.clone();
                     async move {
                         let builder = ProbeInputBuilder::new()
-                            .with_sender_mac(source_mac)
+                            .with_sender_mac(sender_mac)
                             .with_target_ip(Ipv4Addr::new(10, 1, 1, ip_d as u8));
                         client_clone.probe(builder.build().unwrap()).await.unwrap()
                     }
                 })
                 .collect();
 
-            let outcomes = futures::future::join_all(futures).await;
+            let outcomes = futures::future::join_all(future_probes).await;
             for outcome in outcomes {
                 assert_eq!(outcome.status, ProbeStatus::Occupied);
             }
 
-            let futures: Vec<_> = (128..=255)
+            let future_probes: Vec<_> = (128..=255)
                 .map(|ip_d| {
                     let client_clone = client.clone();
                     async move {
                         let builder = ProbeInputBuilder::new()
-                            .with_sender_mac(source_mac)
+                            .with_sender_mac(sender_mac)
                             .with_target_ip(Ipv4Addr::new(10, 1, 1, ip_d as u8));
                         client_clone.probe(builder.build().unwrap()).await.unwrap()
                     }
                 })
                 .collect();
 
-            let outcomes = futures::future::join_all(futures).await;
+            let outcomes = futures::future::join_all(future_probes).await;
             for outcome in outcomes {
                 assert_eq!(outcome.status, ProbeStatus::Free);
             }
