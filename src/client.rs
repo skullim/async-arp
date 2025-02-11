@@ -17,17 +17,17 @@ use tokio::{
 
 use tokio_util::sync::CancellationToken;
 
-use crate::response::Listener;
-use crate::{caching::ArpCache, constants::ETH_PACK_LEN};
-use crate::{
-    constants::ARP_PACK_LEN,
-    error::{Error, Result},
-};
+use crate::{caching::ArpCache, probe::ProbeInput, request::RequestOutcome};
 use crate::{constants::IP_V4_LEN, notification::NotificationHandler};
 use crate::{
-    constants::MAC_ADDR_LEN,
-    input::{ArpProbeInput, ArpRequestInput},
+    constants::{ARP_PACK_LEN, ETH_PACK_LEN, MAC_ADDR_LEN},
+    request::RequestInput,
 };
+use crate::{
+    error::{Error, Result},
+    probe::ProbeOutcome,
+};
+use crate::{probe::ProbeStatus, response::Listener};
 
 pub struct Client {
     response_timeout: Duration,
@@ -68,27 +68,29 @@ impl Client {
         })
     }
 
-    pub async fn probe(&self, input: &ArpProbeInput) -> Result<ProbeOutcome> {
-        let input = ArpRequestInput {
+    pub async fn probe(&self, input: ProbeInput) -> Result<ProbeOutcome> {
+        let input = RequestInput {
             sender_ip: Ipv4Addr::UNSPECIFIED,
             sender_mac: input.sender_mac,
             target_ip: input.target_ip,
             target_mac: MacAddr::zero(),
         };
 
-        match self.request(&input).await {
-            Ok(_) => Ok(ProbeOutcome::Occupied),
-            Err(Error::ResponseTimeout) => Ok(ProbeOutcome::Free),
+        match self.request(input).await {
+            Ok(_) => Ok(ProbeOutcome::new(ProbeStatus::Occupied, input.target_ip)),
+            Err(Error::ResponseTimeout) => {
+                Ok(ProbeOutcome::new(ProbeStatus::Free, input.target_ip))
+            }
             Err(err) => Err(err),
         }
     }
 
-    pub async fn request(&self, input: &ArpRequestInput) -> Result<Arp> {
+    pub async fn request(&self, input: RequestInput) -> Result<RequestOutcome> {
         if let Some(cached) = self.cache.get(&input.target_ip) {
-            return Ok(cached);
+            return Ok(RequestOutcome::new(input, cached));
         }
         let mut eth_buf = [0; ETH_PACK_LEN];
-        Self::fill_packet_buf(&mut eth_buf, input);
+        Self::fill_packet_buf(&mut eth_buf, &input);
         let notifier = self
             .notification_handler
             .register_notifier(input.target_ip)
@@ -108,10 +110,10 @@ impl Client {
         )
         .await
         .map_err(|_| Error::ResponseTimeout)?;
-        Ok(response)
+        Ok(RequestOutcome::new(input, response))
     }
 
-    fn fill_packet_buf(eth_buf: &mut [u8], input: &ArpRequestInput) {
+    fn fill_packet_buf(eth_buf: &mut [u8], input: &RequestInput) {
         let mut eth_packet = MutableEthernetPacket::new(eth_buf).unwrap();
         eth_packet.set_destination(MacAddr::broadcast());
         eth_packet.set_source(input.sender_mac);
@@ -142,12 +144,6 @@ impl Client {
             }
         }
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum ProbeOutcome {
-    Free,
-    Occupied,
 }
 
 struct BackgroundTaskSpawner {
@@ -197,9 +193,9 @@ mod tests {
     };
 
     use crate::{
-        client::{Client, ProbeOutcome},
+        client::{Client, ProbeStatus},
         constants::{ARP_PACK_LEN, ETH_PACK_LEN, IP_V4_LEN, MAC_ADDR_LEN},
-        input::ArpProbeInputBuilder,
+        probe::ProbeInputBuilder,
         response::parse_arp_packet,
     };
     use afpacket::tokio::RawPacketStream;
@@ -230,7 +226,7 @@ mod tests {
             let interface = interfaces
                 .into_iter()
                 .find(|iface| iface.name == interface_name)
-                .ok_or_else(|| format!("Interface {} not found", interface_name))?;
+                .ok_or_else(|| format!("interface {} not found", interface_name))?;
             let mut stream = RawPacketStream::new()?;
             stream.bind(interface_name)?;
             Ok(Self {
@@ -260,7 +256,7 @@ mod tests {
                         arp_response.set_target_hw_addr(request.sender_hw_addr);
 
                         let mut eth_response = MutableEthernetPacket::new(&mut response_buf)
-                            .ok_or("failed to parse Ethernet frame")?;
+                            .ok_or("failed to create Ethernet frame")?;
                         eth_response.set_ethertype(EtherTypes::Arp);
                         eth_response.set_destination(request.sender_hw_addr);
                         eth_response.set_source(self.mac);
@@ -284,7 +280,7 @@ mod tests {
         Command::new("sudo")
             .arg(SCRIPT_PATH)
             .status()
-            .expect("Failed to setup dummy test interface");
+            .expect("failed to setup dummy test interface");
     }
 
     fn set_cap_net_raw_capabilities(test_bin: PathBuf) {
@@ -293,7 +289,7 @@ mod tests {
             .arg("cap_net_raw=eip")
             .arg(test_bin)
             .status()
-            .expect("Failed to set net raw capabilities");
+            .expect("failed to set net raw capabilities");
     }
 
     #[tokio::test]
@@ -318,7 +314,7 @@ mod tests {
             let source_mac = datalink::interfaces()
                 .into_iter()
                 .find(|iface| iface.name == IFACE_NAME)
-                .ok_or_else(|| format!("Interface {} not found", IFACE_NAME))
+                .ok_or_else(|| format!("interface {} not found", IFACE_NAME))
                 .unwrap()
                 .mac
                 .ok_or("interface does not have mac address")
@@ -328,34 +324,34 @@ mod tests {
                 .map(|ip_d| {
                     let client_clone = client.clone();
                     async move {
-                        let builder = ArpProbeInputBuilder::new()
+                        let builder = ProbeInputBuilder::new()
                             .with_sender_mac(source_mac)
                             .with_target_ip(Ipv4Addr::new(10, 1, 1, ip_d as u8));
-                        client_clone.probe(&builder.build().unwrap()).await.unwrap()
+                        client_clone.probe(builder.build().unwrap()).await.unwrap()
                     }
                 })
                 .collect();
 
-            let results = futures::future::join_all(futures).await;
-            for detection_state in results {
-                assert_eq!(detection_state, ProbeOutcome::Occupied);
+            let outcomes = futures::future::join_all(futures).await;
+            for outcome in outcomes {
+                assert_eq!(outcome.status, ProbeStatus::Occupied);
             }
 
             let futures: Vec<_> = (128..=255)
                 .map(|ip_d| {
                     let client_clone = client.clone();
                     async move {
-                        let builder = ArpProbeInputBuilder::new()
+                        let builder = ProbeInputBuilder::new()
                             .with_sender_mac(source_mac)
                             .with_target_ip(Ipv4Addr::new(10, 1, 1, ip_d as u8));
-                        client_clone.probe(&builder.build().unwrap()).await.unwrap()
+                        client_clone.probe(builder.build().unwrap()).await.unwrap()
                     }
                 })
                 .collect();
 
-            let results = futures::future::join_all(futures).await;
-            for detection_state in results {
-                assert_eq!(detection_state, ProbeOutcome::Free);
+            let outcomes = futures::future::join_all(futures).await;
+            for outcome in outcomes {
+                assert_eq!(outcome.status, ProbeStatus::Free);
             }
         }
     }

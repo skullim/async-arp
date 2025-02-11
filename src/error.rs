@@ -10,3 +10,17 @@ pub enum Error {
     Opaque(#[from] OpaqueError),
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[allow(clippy::enum_variant_names)]
+#[derive(ThisError, Debug)]
+#[non_exhaustive]
+pub enum InputBuildError {
+    #[error("sender MAC address is required")]
+    MissingSenderMac,
+    #[error("sender IP address is required")]
+    MissingSenderIp,
+    #[error("target MAC address is required")]
+    MissingTargetMac,
+    #[error("target IP address is required")]
+    MissingTargetIp,
+}
