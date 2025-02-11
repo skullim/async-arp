@@ -29,14 +29,6 @@ use crate::{
 };
 use crate::{probe::ProbeStatus, response::Listener};
 
-pub struct Client {
-    response_timeout: Duration,
-    stream: Mutex<RawPacketStream>,
-    cache: Arc<ArpCache>,
-    notification_handler: Arc<NotificationHandler>,
-    _task_spawner: BackgroundTaskSpawner,
-}
-
 pub struct ClientConfig {
     pub interface_name: String,
     pub response_timeout: Duration,
@@ -77,7 +69,40 @@ impl ClientConfigBuilder {
     }
 }
 
+/// A client for handling ARP (Address Resolution Protocol) requests and probes.
+///
+/// The `Client` is responsible for sending ARP requests, caching responses,
+/// and handling notifications. It uses a raw packet stream for network communication.
+///
+/// # Example
+/// ```no_run
+/// let config = ClientConfig {
+///     interface_name: "eth0".to_string(),
+///     response_timeout: Duration::from_secs(2),
+///     cache_timeout: Duration::from_secs(60),
+/// };
+///
+/// let client = Client::new(config).expect("Failed to create ARP client");
+/// ```
+pub struct Client {
+    response_timeout: Duration,
+    stream: Mutex<RawPacketStream>,
+    cache: Arc<ArpCache>,
+
+    notification_handler: Arc<NotificationHandler>,
+    _task_spawner: BackgroundTaskSpawner,
+}
+
 impl Client {
+    /// Creates a new `Client` with the given configuration.
+    ///
+    /// This function initializes a raw packet stream, binds it to the specified
+    /// network interface, and sets up caching and background tasks for listening
+    /// to ARP responses.
+    ///
+    /// # Errors
+    /// Returns an error if the packet stream cannot be created or if binding to
+    /// the specified network interface fails.
     pub fn new(config: ClientConfig) -> Result<Self> {
         let mut stream = RawPacketStream::new().map_err(|err| {
             Error::Opaque(format!("failed to create packet stream, reason: {}", err).into())
@@ -104,6 +129,30 @@ impl Client {
         })
     }
 
+    /// Probes for the presence of a device at the given IP address.
+    ///
+    /// This function sends an ARP request to determine whether an IP address
+    /// is occupied. It returns a `ProbeOutcome`, indicating whether the address
+    /// is in use.
+    ///
+    /// # Example
+    /// ```no_run
+    /// let probe_input = ProbeInputBuilder::new()
+    ///     .with_sender_mac(MacAddr::new([0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]))
+    ///     .with_target_ip(Ipv4Addr::new(192, 168, 1, 1))
+    ///     .build()
+    ///     .expect("Failed to build probe input");
+    ///
+    /// let outcome = client.probe(probe_input).await?;
+    ///
+    /// match outcome.status {
+    ///     ProbeStatus::Occupied => println!("IP is in use"),
+    ///     ProbeStatus::Free => println!("IP is available"),
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error if sending the ARP request fails.
     pub async fn probe(&self, input: ProbeInput) -> Result<ProbeOutcome> {
         let input = RequestInput {
             sender_ip: Ipv4Addr::UNSPECIFIED,
@@ -121,6 +170,30 @@ impl Client {
         }
     }
 
+    /// Sends an ARP request and waits for a response.
+    ///
+    /// If the requested IP is already cached, the cached response is returned immediately.
+    /// Otherwise, a new ARP request is sent, and the client waits for a response within
+    /// the configured timeout period.
+    ///
+    /// # Example
+    /// ```no_run
+    /// let request_input = RequestInputBuilder::new()
+    ///     .with_sender_ip(Ipv4Addr::new(192, 168, 1, 100))
+    ///     .with_sender_mac(MacAddr::new([0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]))
+    ///     .with_target_ip(Ipv4Addr::new(192, 168, 1, 1))
+    ///     .with_target_mac(MacAddr::zero())
+    ///     .build()
+    ///     .expect("Failed to build request input");
+    ///
+    /// let outcome = client.request(request_input).await?;
+    ///
+    /// println!("Received response: {:?}", outcome);
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error if sending the request fails or if no response is received
+    /// within the timeout period.
     pub async fn request(&self, input: RequestInput) -> Result<RequestOutcome> {
         if let Some(cached) = self.cache.get(&input.target_ip) {
             return Ok(RequestOutcome::new(input, cached));
