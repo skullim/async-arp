@@ -20,4 +20,5 @@ tokio = {version = "1.43.0", features = ["io-util", "time", "rt", "macros", "syn
 tokio-util = "0.7.13"
 
 [dev-dependencies]
+clap = { version = "4.5.28", features = ["derive"] }
 ipnet = "2.11.0"
