@@ -1,0 +1,56 @@
+version: 2.1
+
+executors:
+  rust:
+    machine:
+      image: ubuntu-2204:current
+
+commands:
+  install-rust:
+    description: "Install Rust and set up default toolchain"
+    steps:
+      - run:
+          name: Install Rust
+          command: |
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source $HOME/.cargo/env
+            rustup default stable
+  install-dependencies:
+    description: Install just, iproute2 (ip command) and libcap2-bin (setcap)
+    steps:
+      - run:
+          name: Install deps
+          command: |
+            sudo apt-get update && sudo apt-get install -y iproute2 libcap2-bin
+            cargo install just
+
+jobs:
+  build-and-test:
+    executor: rust
+    steps:
+      - checkout
+      - install-rust
+      - install-dependencies
+      - run:
+          name: Version information
+          command: rustc --version; cargo --version; rustup --version
+      - run:
+          name: Calculate dependencies
+          command: cargo generate-lockfile
+      - restore_cache:
+          key: cargo-{{ checksum "Cargo.lock" }}
+      - run:
+          name: Build all targets
+          command: cargo build
+      - save_cache:
+          key: cargo-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo
+      - run:
+          name: Run all tests
+          command: just test
+
+workflows:
+  build-and-test:
+    jobs:
+      - build-and-test
