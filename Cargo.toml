@@ -1,6 +1,6 @@
 [package]
 name = "async-arp"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 authors =["Adrian Skulimowski"]
@@ -9,6 +9,8 @@ repository = "https://github.com/skullim/async-arp"
 license = "MIT/Apache-2.0"
 keywords = ["arp", "async", "network", "protocol", "client"]
 categories = ["network-programming"]
+
+exclude = [".circleci/"]
 
 [dependencies]
 afpacket = {version = "0.2.3", features = ["async-tokio"]}
