@@ -76,6 +76,9 @@ impl ClientConfigBuilder {
 ///
 /// # Example
 /// ```no_run
+/// use async_arp::client::{Client, ClientConfig};
+/// use std::time::Duration;
+///
 /// let config = ClientConfig {
 ///     interface_name: "eth0".to_string(),
 ///     response_timeout: Duration::from_secs(2),
@@ -137,18 +140,25 @@ impl Client {
     ///
     /// # Example
     /// ```no_run
+    /// use async_arp::probe::{ProbeStatus, ProbeInputBuilder};
+    /// use async_arp::client::Client;
+    /// use async_arp::client::ClientConfigBuilder;
+    /// use pnet::util::MacAddr;
+    /// use std::net::Ipv4Addr;
+    ///
     /// let probe_input = ProbeInputBuilder::new()
-    ///     .with_sender_mac(MacAddr::new([0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]))
+    ///     .with_sender_mac(MacAddr::new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E))
     ///     .with_target_ip(Ipv4Addr::new(192, 168, 1, 1))
     ///     .build()
     ///     .expect("Failed to build probe input");
-    ///
-    /// let outcome = client.probe(probe_input).await?;
-    ///
-    /// match outcome.status {
-    ///     ProbeStatus::Occupied => println!("IP is in use"),
-    ///     ProbeStatus::Free => println!("IP is available"),
+    /// tokio_test::block_on(async {
+    ///     let client = Client::new(ClientConfigBuilder::new("eth0").build()).unwrap();
+    ///     let outcome = client.probe(probe_input).await.unwrap();
+    ///     match outcome.status {
+    ///         ProbeStatus::Occupied => println!("IP is in use"),
+    ///         ProbeStatus::Free => println!("IP is available"),
     /// }
+    /// })
     /// ```
     ///
     /// # Errors
@@ -178,17 +188,24 @@ impl Client {
     ///
     /// # Example
     /// ```no_run
+    /// use pnet::util::MacAddr;
+    /// use std::net::Ipv4Addr;
+    /// use async_arp::client::{Client, ClientConfigBuilder};
+    /// use async_arp::request::RequestInputBuilder;
+    ///
     /// let request_input = RequestInputBuilder::new()
     ///     .with_sender_ip(Ipv4Addr::new(192, 168, 1, 100))
-    ///     .with_sender_mac(MacAddr::new([0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]))
+    ///     .with_sender_mac(MacAddr::new(0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E))
     ///     .with_target_ip(Ipv4Addr::new(192, 168, 1, 1))
     ///     .with_target_mac(MacAddr::zero())
     ///     .build()
     ///     .expect("Failed to build request input");
+    /// tokio_test::block_on(async {
+    ///     let client = Client::new(ClientConfigBuilder::new("eth0").build()).unwrap();
+    ///     let outcome = client.request(request_input).await.unwrap();
     ///
-    /// let outcome = client.request(request_input).await?;
-    ///
-    /// println!("Received response: {:?}", outcome);
+    ///     println!("Received response: {:?}", outcome);
+    /// })
     /// ```
     ///
     /// # Errors
@@ -293,12 +310,7 @@ impl Drop for BackgroundTaskSpawner {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        net::Ipv4Addr,
-        path::PathBuf,
-        process::Command,
-        sync::{Arc, Once},
-    };
+    use std::{net::Ipv4Addr, sync::Arc};
 
     use crate::{
         client::{Client, ClientConfigBuilder, ProbeStatus},
@@ -378,37 +390,9 @@ mod tests {
         }
     }
 
-    static INIT: Once = Once::new();
-
-    fn init_dummy_interface() {
-        const SCRIPT_PATH: &str = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/scripts/setup_dummy_interface.sh"
-        );
-        Command::new("sudo")
-            .arg(SCRIPT_PATH)
-            .status()
-            .expect("failed to setup dummy test interface");
-    }
-
-    fn set_cap_net_raw_capabilities(test_bin: PathBuf) {
-        Command::new("sudo")
-            .arg("setcap")
-            .arg("cap_net_raw=eip")
-            .arg(test_bin)
-            .status()
-            .expect("failed to set net raw capabilities");
-    }
-
     #[tokio::test]
     async fn test_detection() {
-        INIT.call_once(init_dummy_interface);
-        // not ideal, capabilities are not affected during first test run
-        let test_bin_path = std::env::current_exe().expect("Failed to get test executable");
-        set_cap_net_raw_capabilities(test_bin_path);
-
         const INTERFACE_NAME: &str = "dummy0";
-
         tokio::spawn(async move {
             let net = Ipv4Net::new(Ipv4Addr::new(10, 1, 1, 0), 25).unwrap();
             let mut server = Server::new(INTERFACE_NAME, net).unwrap();
