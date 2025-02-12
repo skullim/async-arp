@@ -76,7 +76,7 @@ impl ClientConfigBuilder {
 ///
 /// # Example
 /// ```no_run
-/// use async_arp::client::{Client, ClientConfig};
+/// use async_arp::{Client, ClientConfig};
 /// use std::time::Duration;
 ///
 /// let config = ClientConfig {
@@ -140,9 +140,7 @@ impl Client {
     ///
     /// # Example
     /// ```no_run
-    /// use async_arp::probe::{ProbeStatus, ProbeInputBuilder};
-    /// use async_arp::client::Client;
-    /// use async_arp::client::ClientConfigBuilder;
+    /// use async_arp::{Client, ClientConfigBuilder, ProbeStatus, ProbeInputBuilder};
     /// use pnet::util::MacAddr;
     /// use std::net::Ipv4Addr;
     ///
@@ -190,8 +188,7 @@ impl Client {
     /// ```no_run
     /// use pnet::util::MacAddr;
     /// use std::net::Ipv4Addr;
-    /// use async_arp::client::{Client, ClientConfigBuilder};
-    /// use async_arp::request::RequestInputBuilder;
+    /// use async_arp::{Client, ClientConfigBuilder, RequestInputBuilder};
     ///
     /// let request_input = RequestInputBuilder::new()
     ///     .with_sender_ip(Ipv4Addr::new(192, 168, 1, 100))

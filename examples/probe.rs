@@ -1,7 +1,4 @@
-use async_arp::{
-    client::{Client, ClientConfigBuilder},
-    probe::{ProbeInputBuilder, ProbeStatus},
-};
+use async_arp::{Client, ClientConfigBuilder, ProbeInputBuilder, ProbeStatus};
 use ipnet::Ipv4Net;
 use pnet::datalink::{self};
 use std::sync::Arc;

@@ -6,10 +6,15 @@
 //! ```
 //! In a similar fashion, more advanced ARP requests (e.g., for diagnostic purposes) can be sent using [`client::Client::request`].
 
-pub mod client;
-pub mod error;
-pub mod probe;
-pub mod request;
+mod client;
+mod error;
+mod probe;
+mod request;
+
+pub use client::{Client, ClientConfig, ClientConfigBuilder};
+pub use error::{Error, InputBuildError, OpaqueError, Result};
+pub use probe::{ProbeInput, ProbeInputBuilder, ProbeOutcome, ProbeStatus};
+pub use request::{RequestInput, RequestInputBuilder, RequestOutcome};
 
 pub(crate) mod caching;
 pub(crate) mod constants;
