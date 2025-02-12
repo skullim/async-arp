@@ -15,7 +15,8 @@ run-tests:
 
 test: && init-network build-tests assign-capabilities run-tests
 
-publish: && test
+publish:
+    just test
     cargo publish
 
     
