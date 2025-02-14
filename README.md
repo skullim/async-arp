@@ -11,6 +11,7 @@
 - **Host Probing**: Quickly probe for active devices in the network using ARP requests.
 - **Advanced Requests**: Send custom ARP requests and interact with devices in more complex ways.
 - **ARP Caching**: ARP responses are cached for a customizable duration, reducing redundant network requests.
+- **Retry capabilities**:  Improves reliability when probing hosts with intermittent responses.
 - **Unix-only**: This crate is designed for Unix-based systems (Linux, macOS, BSD).
 
 ## Documentation
