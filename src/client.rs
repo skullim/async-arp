@@ -8,7 +8,7 @@ use pnet::{
     util::MacAddr,
 };
 
-use std::{net::Ipv4Addr, sync::Arc, time::Duration};
+use std::{future::Future, net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use tokio::{
     io::AsyncWriteExt,
@@ -28,6 +28,75 @@ use crate::{
     probe::ProbeOutcome,
 };
 use crate::{probe::ProbeStatus, response::Listener};
+
+/// A struct responsible for performing batch requests and probes with retry logic.
+///
+/// This struct abstracts the client and provides methods to perform multiple
+/// probes or requests with retry capabilities. The number of retries can be
+/// configured during initialization.
+pub struct ClientSpinner {
+    client: Client,
+    n_retries: usize,
+}
+
+impl ClientSpinner {
+    /// Creates a new instance of `ClientSpinner` with the given `Client`.
+    ///
+    /// This constructor initializes a `ClientSpinner` with a client and sets the
+    /// number of retries to `0` (no retries).
+    pub fn new(client: Client) -> Self {
+        Self {
+            client,
+            n_retries: 0,
+        }
+    }
+
+    /// Sets the number of retries for subsequent probes and requests.
+    pub fn with_retries(mut self, n_retires: usize) -> Self {
+        self.n_retries = n_retires;
+        self
+    }
+
+    /// Performs a batch of probes asynchronously with retries.
+    ///
+    /// This method takes an array of `ProbeInput` and attempts to probe each one.
+    /// If a probe fails, it will retry up to `n_retries` times before returning the
+    /// results.
+    pub async fn probe_batch(&self, inputs: &[ProbeInput]) -> Vec<Result<ProbeOutcome>> {
+        let futures_producer = || {
+            inputs
+                .iter()
+                .map(|input| async { self.client.probe(*input).await })
+        };
+        Self::handle_retries(self.n_retries, futures_producer).await
+    }
+
+    /// Performs a batch of requests asynchronously with retries.
+    ///
+    /// This method takes an array of `RequestInput` and attempts to request each one.
+    /// If a request fails, it will retry up to `n_retries` times before returning the
+    /// results.
+    pub async fn request_batch(&self, inputs: &[RequestInput]) -> Vec<Result<RequestOutcome>> {
+        let futures_producer = || {
+            inputs
+                .iter()
+                .map(|input| async { self.client.request(*input).await })
+        };
+        Self::handle_retries(self.n_retries, futures_producer).await
+    }
+
+    async fn handle_retries<F, I, Fut, T>(n_retries: usize, futures_producer: F) -> Vec<Result<T>>
+    where
+        F: Fn() -> I,
+        Fut: Future<Output = Result<T>>,
+        I: Iterator<Item = Fut>,
+    {
+        for _ in 0..n_retries {
+            futures::future::join_all(futures_producer()).await;
+        }
+        futures::future::join_all(futures_producer()).await
+    }
+}
 
 pub struct ClientConfig {
     pub interface_name: String,

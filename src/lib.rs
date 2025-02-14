@@ -11,7 +11,7 @@ mod error;
 mod probe;
 mod request;
 
-pub use client::{Client, ClientConfig, ClientConfigBuilder};
+pub use client::{Client, ClientConfig, ClientConfigBuilder, ClientSpinner};
 pub use error::{Error, InputBuildError, OpaqueError, Result};
 pub use probe::{ProbeInput, ProbeInputBuilder, ProbeOutcome, ProbeStatus};
 pub use request::{RequestInput, RequestInputBuilder, RequestOutcome};
