@@ -1,28 +1,42 @@
 default:
     just --list
 
-init-network:
-    ./scripts/setup_dummy_interface.sh
+_create-interface interface_name:
+    ./scripts/create_interface.sh {{ interface_name }}
 
-assign-capabilities script:
+_init-network interface_name:
+    just _create-interface {{ interface_name }}
+    ./scripts/setup_interface.sh {{ interface_name }}
+
+_remove-interface interface_name:
+    ./scripts/remove_interface.sh {{ interface_name }}
+
+_assign-capabilities script:
     #!/usr/bin/env sh
     for file in $( .{{ script }}); do
     ./scripts/setup_net_raw.sh "$file"
     done
 
-assign-test-capabilities:
-    just assign-capabilities /scripts/find_test_files.sh
+_assign-test-capabilities:
+    just _assign-capabilities /scripts/find_test_files.sh
 
-assign-examples-capabilities:
-    just assign-capabilities /scripts/find_example_files.sh
+_assign-examples-capabilities:
+    just _assign-capabilities /scripts/find_example_files.sh
 
-build-tests:
+_build-tests:
     cargo test --no-run
 
-run-tests:
+_run-tests:
     cargo test
 
-test: && init-network build-tests assign-test-capabilities run-tests
+test:
+    just _init-network dummy0
+    just _create-interface down_dummy
+    just _build-tests
+    just _assign-test-capabilities
+    just _run-tests
+    just _remove-interface down_dummy
+    just _remove-interface dummy0
 
 publish:
     cargo build --all-targets
@@ -31,7 +45,7 @@ publish:
 
 run-example name interface:
     cargo build --examples
-    just assign-examples-capabilities
+    just _assign-examples-capabilities
     cargo run --example {{ name }} -- -i {{ interface }}
 
 run-spinner:
