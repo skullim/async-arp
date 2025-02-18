@@ -1,4 +1,4 @@
-use crate::error::InputBuildError;
+use crate::error::{InputBuildError, ResponseTimeout};
 use pnet::{packet::arp::Arp, util::MacAddr};
 use std::net::Ipv4Addr;
 
@@ -43,7 +43,7 @@ impl RequestInputBuilder {
         self
     }
 
-    pub fn build(&self) -> std::result::Result<RequestInput, InputBuildError> {
+    pub fn build(&self) -> Result<RequestInput, InputBuildError> {
         Ok(RequestInput {
             target_mac: self.target_mac.ok_or(InputBuildError::MissingTargetMac)?,
             target_ip: self.target_ip.ok_or(InputBuildError::MissingTargetIp)?,
@@ -56,11 +56,14 @@ impl RequestInputBuilder {
 #[derive(Clone, Debug)]
 pub struct RequestOutcome {
     pub input: RequestInput,
-    pub response: Arp,
+    pub response_result: Result<Arp, ResponseTimeout>,
 }
 
 impl RequestOutcome {
-    pub fn new(input: RequestInput, response: Arp) -> Self {
-        Self { input, response }
+    pub fn new(input: RequestInput, response_result: Result<Arp, ResponseTimeout>) -> Self {
+        Self {
+            input,
+            response_result,
+        }
     }
 }

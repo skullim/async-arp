@@ -17,7 +17,9 @@ use tokio::{
 
 use tokio_util::sync::CancellationToken;
 
-use crate::{caching::ArpCache, probe::ProbeInput, request::RequestOutcome};
+use crate::{
+    caching::ArpCache, error::ResponseTimeout, probe::ProbeInput, request::RequestOutcome,
+};
 use crate::{constants::IP_V4_LEN, notification::NotificationHandler};
 use crate::{
     constants::{ARP_PACK_LEN, ETH_PACK_LEN, MAC_ADDR_LEN},
@@ -63,7 +65,7 @@ impl ClientSpinner {
     /// This method takes an array of `ProbeInput` and attempts to probe each one.
     /// If a probe fails, it will retry up to `n_retries` times before returning the
     /// results.
-    pub async fn probe_batch(&self, inputs: &[ProbeInput]) -> Vec<Result<ProbeOutcome>> {
+    pub async fn probe_batch(&self, inputs: &[ProbeInput]) -> Result<Vec<ProbeOutcome>> {
         let futures_producer = || {
             inputs
                 .iter()
@@ -77,7 +79,7 @@ impl ClientSpinner {
     /// This method takes an array of `RequestInput` and attempts to request each one.
     /// If a request fails, it will retry up to `n_retries` times before returning the
     /// results.
-    pub async fn request_batch(&self, inputs: &[RequestInput]) -> Vec<Result<RequestOutcome>> {
+    pub async fn request_batch(&self, inputs: &[RequestInput]) -> Result<Vec<RequestOutcome>> {
         let futures_producer = || {
             inputs
                 .iter()
@@ -86,16 +88,16 @@ impl ClientSpinner {
         Self::handle_retries(self.n_retries, futures_producer).await
     }
 
-    async fn handle_retries<F, I, Fut, T>(n_retries: usize, futures_producer: F) -> Vec<Result<T>>
+    async fn handle_retries<F, I, Fut, T>(n_retries: usize, futures_producer: F) -> Result<Vec<T>>
     where
         F: Fn() -> I,
         Fut: Future<Output = Result<T>>,
         I: Iterator<Item = Fut>,
     {
         for _ in 0..n_retries {
-            futures::future::join_all(futures_producer()).await;
+            futures::future::try_join_all(futures_producer()).await?;
         }
-        futures::future::join_all(futures_producer()).await
+        futures::future::try_join_all(futures_producer()).await
     }
 }
 
@@ -243,9 +245,12 @@ impl Client {
         };
 
         match self.request(input).await {
-            Ok(_) => Ok(ProbeOutcome::new(ProbeStatus::Occupied, input.target_ip)),
-            Err(Error::ResponseTimeout) => {
-                Ok(ProbeOutcome::new(ProbeStatus::Free, input.target_ip))
+            Ok(response) => {
+                let status = match response.response_result {
+                    Ok(_) => ProbeStatus::Occupied,
+                    Err(_) => ProbeStatus::Free,
+                };
+                Ok(ProbeOutcome::new(status, input.target_ip))
             }
             Err(err) => Err(err),
         }
@@ -283,7 +288,7 @@ impl Client {
     /// within the timeout period.
     pub async fn request(&self, input: RequestInput) -> Result<RequestOutcome> {
         if let Some(cached) = self.cache.get(&input.target_ip) {
-            return Ok(RequestOutcome::new(input, cached));
+            return Ok(RequestOutcome::new(input, Ok(cached)));
         }
         let mut eth_buf = [0; ETH_PACK_LEN];
         Self::fill_packet_buf(&mut eth_buf, &input);
@@ -300,13 +305,13 @@ impl Client {
                 Error::Opaque(format!("failed to send request, reason: {}", err).into())
             })?;
 
-        let response = tokio::time::timeout(
+        let response_result = tokio::time::timeout(
             self.response_timeout,
             self.await_response(notifier, &input.target_ip),
         )
         .await
-        .map_err(|_| Error::ResponseTimeout)?;
-        Ok(RequestOutcome::new(input, response))
+        .map_err(|_| ResponseTimeout {});
+        Ok(RequestOutcome::new(input, response_result))
     }
 
     fn fill_packet_buf(eth_buf: &mut [u8], input: &RequestInput) {
@@ -388,6 +393,7 @@ mod tests {
         constants::{ARP_PACK_LEN, ETH_PACK_LEN, IP_V4_LEN, MAC_ADDR_LEN},
         probe::ProbeInputBuilder,
         response::parse_arp_packet,
+        ClientSpinner,
     };
     use afpacket::tokio::RawPacketStream;
     use ipnet::Ipv4Net;
@@ -462,7 +468,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_detection() {
+    async fn test_spinner_down_interface() {
+        const INTERFACE_NAME: &str = "down_dummy";
+        let client = Client::new(ClientConfigBuilder::new(INTERFACE_NAME).build()).unwrap();
+        let spinner = ClientSpinner::new(client);
+        let result = spinner
+            .probe_batch(&[ProbeInputBuilder::new()
+                .with_sender_mac(MacAddr::broadcast())
+                .with_target_ip(Ipv4Addr::new(10, 1, 1, 1))
+                .build()
+                .unwrap()])
+            .await;
+        assert!(result.is_err())
+    }
+
+    // Even though no async functions called directly, tokio runtime must be running to rely on AsyncFd (which is used by dependency)
+    #[tokio::test]
+    async fn test_invalid_interface() {
+        const INTERFACE_NAME: &str = "invalid_dummy";
+        assert!(Client::new(ClientConfigBuilder::new(INTERFACE_NAME).build()).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_client_detection() {
         const INTERFACE_NAME: &str = "dummy0";
         tokio::spawn(async move {
             let net = Ipv4Net::new(Ipv4Addr::new(10, 1, 1, 0), 25).unwrap();

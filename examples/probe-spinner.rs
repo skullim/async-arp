@@ -1,4 +1,4 @@
-use async_arp::{Client, ClientConfigBuilder, ClientSpinner, ProbeStatus};
+use async_arp::{Client, ClientConfigBuilder, ClientSpinner, ProbeStatus, Result};
 use clap::Parser;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 mod common;
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
+async fn main() -> Result<()> {
     let args = common::Args::parse();
     let interface = common::interface_from(&args.iface);
     let net = common::net_from(&interface).unwrap();
@@ -15,8 +15,7 @@ async fn main() {
         ClientConfigBuilder::new(&args.iface)
             .with_response_timeout(Duration::from_millis(500))
             .build(),
-    )
-    .unwrap();
+    )?;
     let spinner = ClientSpinner::new(client).with_retries(9);
 
     let start = Instant::now();
@@ -24,9 +23,8 @@ async fn main() {
         .probe_batch(&common::generate_probe_inputs(net, interface))
         .await;
 
-    let occupied = outcomes
+    let occupied = outcomes?
         .into_iter()
-        .filter_map(|outcome| outcome.ok())
         .filter(|outcome| outcome.status == ProbeStatus::Occupied);
     let scan_duration = start.elapsed();
 
@@ -38,4 +36,6 @@ async fn main() {
         }
         writeln!(stdout, "Scan took {:?}", scan_duration).unwrap();
     }
+
+    Ok(())
 }
