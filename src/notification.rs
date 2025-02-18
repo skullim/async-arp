@@ -2,6 +2,7 @@ use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 
 use tokio::sync::{Mutex, Notify};
 
+#[derive(Debug)]
 pub(super) struct NotificationHandler {
     notifiers: Mutex<HashMap<Ipv4Addr, Arc<Notify>>>,
 }

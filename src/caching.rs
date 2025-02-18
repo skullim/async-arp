@@ -5,6 +5,7 @@ use timedmap::TimedMap;
 
 use crate::notification::NotificationHandler;
 
+#[derive(Debug)]
 pub(super) struct ArpCache {
     timeout: Duration,
     responses: TimedMap<Ipv4Addr, Arp>,

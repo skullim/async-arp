@@ -41,7 +41,7 @@ jobs:
           key: cargo-{{ checksum "Cargo.lock" }}
       - run:
           name: Build all targets
-          command: cargo build
+          command: cargo build --all-targets
       - save_cache:
           key: cargo-{{ checksum "Cargo.lock" }}
           paths:

@@ -6,13 +6,12 @@ init-network:
 
 assign-capabilities script:
     #!/usr/bin/env sh
-    for file in $( .{{script}}); do
+    for file in $( .{{ script }}); do
     ./scripts/setup_net_raw.sh "$file"
     done
 
 assign-test-capabilities:
     just assign-capabilities /scripts/find_test_files.sh
-
 
 assign-examples-capabilities:
     just assign-capabilities /scripts/find_example_files.sh
@@ -33,7 +32,7 @@ publish:
 run-example name interface:
     cargo build --examples
     just assign-examples-capabilities
-    cargo run --example {{name}} -- -i {{interface}}
+    cargo run --example {{ name }} -- -i {{ interface }}
 
 run-spinner:
     just run-example probe-spinner wlp4s0

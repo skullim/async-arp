@@ -34,6 +34,7 @@ use crate::{probe::ProbeStatus, response::Listener};
 /// This struct abstracts the client and provides methods to perform multiple
 /// probes or requests with retry capabilities. The number of retries can be
 /// configured during initialization.
+#[derive(Debug)]
 pub struct ClientSpinner {
     client: Client,
     n_retries: usize,
@@ -98,12 +99,14 @@ impl ClientSpinner {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub interface_name: String,
     pub response_timeout: Duration,
     pub cache_timeout: Duration,
 }
 
+#[derive(Debug, Clone)]
 pub struct ClientConfigBuilder {
     interface_name: String,
     response_timeout: Option<Duration>,
@@ -156,6 +159,7 @@ impl ClientConfigBuilder {
 ///
 /// let client = Client::new(config).expect("Failed to create ARP client");
 /// ```
+#[derive(Debug)]
 pub struct Client {
     response_timeout: Duration,
     stream: Mutex<RawPacketStream>,
@@ -338,6 +342,7 @@ impl Client {
     }
 }
 
+#[derive(Debug)]
 struct BackgroundTaskSpawner {
     token: CancellationToken,
     handle: Option<JoinHandle<()>>,
